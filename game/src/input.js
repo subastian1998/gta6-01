@@ -1,53 +1,130 @@
-// Keyboard and pointer input. Held keys give a steering direction; one-shot presses (start or
-// restart, pause) are queued as bit flags and taken once by the loop, so a press between two
-// frames is never lost and never counted twice.
-
+// Keyboard + mouse input. WASD/arrows move and drive, Shift sprints, E enters
+// and leaves cars, Space is the handbrake, mouse aims and click shoots, M starts
+// the next mission, P pauses, R restarts after Busted/Wasted. Keys are tracked
+// as a live set; edge-triggered actions (pressed once) are consumed by takeActions.
 export const ACTION_CONFIRM = 1;
 export const ACTION_PAUSE = 2;
+export const ACTION_ENTER_CAR = 4;
+export const ACTION_MISSION = 8;
+export const ACTION_RESTART = 16;
+export const ACTION_HANDBRAKE = 32;
+export const ACTION_SPRINT = 64;
 
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
+const KEY_ACTIONS = {
+  Enter: ACTION_CONFIRM,
+  Space: ACTION_CONFIRM,
+  KeyP: ACTION_PAUSE,
+  Escape: ACTION_PAUSE,
+  KeyE: ACTION_ENTER_CAR,
+  KeyM: ACTION_MISSION,
+  KeyR: ACTION_RESTART,
+};
 
-export function createInput(target) {
-  let left = false;
-  let right = false;
+export function createInput(canvas) {
+  const keys = new Set();
   let actions = 0;
+  let mouseX = 0;
+  let mouseY = 0;
+  let mouseDown = false;
+  let mouseClicked = false;
 
-  window.addEventListener('keydown', (event) => {
-    if (LEFT.has(event.code)) left = true;
-    else if (RIGHT.has(event.code)) right = true;
-    else if (CONFIRM.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else return;
-    event.preventDefault();
-  });
-  window.addEventListener('keyup', (event) => {
-    if (LEFT.has(event.code)) left = false;
-    else if (RIGHT.has(event.code)) right = false;
-  });
-  // A key released while the tab is hidden never sends keyup: let go of everything on blur.
-  window.addEventListener('blur', () => {
-    left = false;
-    right = false;
-  });
-  target.addEventListener('pointerdown', () => {
-    actions |= ACTION_CONFIRM;
-  });
+  function onKeyDown(event) {
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(event.code)) event.preventDefault();
+    if (!event.repeat) {
+      const action = KEY_ACTIONS[event.code];
+      if (action) actions |= action;
+    }
+    keys.add(event.code);
+  }
+  function onKeyUp(event) {
+    keys.delete(event.code);
+  }
+  function onMouseMove(event) {
+    const rect = canvas.getBoundingClientRect();
+    mouseX = event.clientX - rect.left;
+    mouseY = event.clientY - rect.top;
+  }
+  function onMouseDown(event) {
+    onMouseMove(event);
+    mouseDown = true;
+    mouseClicked = true;
+    if (event.button === 0) actions |= ACTION_CONFIRM;
+  }
+  function onMouseUp() {
+    mouseDown = false;
+  }
+  function onBlur() {
+    keys.clear();
+    mouseDown = false;
+  }
+
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
+  window.addEventListener('blur', onBlur);
+  canvas.addEventListener('mousemove', onMouseMove);
+  canvas.addEventListener('mousedown', onMouseDown);
+  window.addEventListener('mouseup', onMouseUp);
 
   return {
-    /** -1 for left, 1 for right, 0 for neither or both. */
-    direction() {
-      return (right ? 1 : 0) - (left ? 1 : 0);
+    /** Move axes from WASD/arrows: x right, y down, each -1, 0 or 1. */
+    axes() {
+      let x = 0;
+      let y = 0;
+      if (keys.has('KeyA') || keys.has('ArrowLeft')) x -= 1;
+      if (keys.has('KeyD') || keys.has('ArrowRight')) x += 1;
+      if (keys.has('KeyW') || keys.has('ArrowUp')) y -= 1;
+      if (keys.has('KeyS') || keys.has('ArrowDown')) y += 1;
+      return { x, y };
     },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
+    isDown(code) {
+      return keys.has(code);
+    },
+    get sprint() {
+      return keys.has('ShiftLeft') || keys.has('ShiftRight');
+    },
+    get handbrake() {
+      return keys.has('Space');
+    },
+    get mouse() {
+      return { x: mouseX, y: mouseY, down: mouseDown };
+    },
+    /** True once per click; consumed by the caller. */
+    takeClick() {
+      const clicked = mouseClicked;
+      mouseClicked = false;
+      return clicked;
+    },
+    /** Edge-triggered actions since the last call, as a bitmask. */
     takeActions() {
       const taken = actions;
       actions = 0;
       return taken;
     },
+  };
+}
+
+/** A scripted input source for screenshots and tests: drives like a held key set. */
+export function createScriptedInput() {
+  const keys = new Set();
+  return {
+    set(list) {
+      keys.clear();
+      for (const k of list) keys.add(k);
+    },
+    axes() {
+      let x = 0;
+      let y = 0;
+      if (keys.has('KeyA')) x -= 1;
+      if (keys.has('KeyD')) x += 1;
+      if (keys.has('KeyW')) y -= 1;
+      if (keys.has('KeyS')) y += 1;
+      return { x, y };
+    },
+    isDown(code) { return keys.has(code); },
+    get sprint() { return keys.has('ShiftLeft'); },
+    get handbrake() { return keys.has('Space'); },
+    get mouse() { return { x: 640, y: 300, down: false }; },
+    takeClick() { return false; },
+    takeActions() { return 0; },
   };
 }
